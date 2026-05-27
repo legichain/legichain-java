@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.2.0 — 2026-05-28
+
+* **KYC** identity verification — `kycCreateApplication`, `kycStatus`
+  (+ extracted overload), `kycUploadDocument`, `kycSubmitNfc` (+
+  `kycNfcAccessError` convenience), `kycUploadSelfie`,
+  `kycLivenessChallenge`, `kycSubmitLiveness`, `kycSubmit`,
+  `kycRetry`, `kycExtendTtl`.
+  * Tenant admin: `kycAdminList`, `kycAdminDetail`, `kycAdminApprove`,
+    `kycAdminReject`, `kycAdminRequestRetry`.
+* **Address Verification** — `avCreate`, `avUploadProof`, `avSubmit`,
+  `avStatus`.
+* **Personas** — `personaCreate`, `personaList`, `personaGet`.
+* `buildRequest` + `post` / `get` overloads accept `clientToken` →
+  `X-KYC-Client-Token` header on per-application endpoints.
+* Server-side: this SDK forwards base64 NFC chip bytes produced by a
+  mobile client; it never reads chips itself.
+
+# Changelog
+
 All notable changes to the Legichain Java SDK.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
