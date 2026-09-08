@@ -38,9 +38,16 @@ import java.util.Objects;
  */
 public final class Legichain {
 
+    /** The API refusing a call for an account it does not serve. */
+    private static final String WRONG_REGION = "REG_001_WRONG_REGION";
+
+
     /** Build the bearer header value once at construction. */
     private final String authHeader;
-    private final URI    baseUri;
+    // Both move by themselves the first time the API says this account
+    // is served elsewhere, and a client may be shared between threads.
+    private volatile URI    baseUri;
+    private volatile String region;
     private final HttpClient http;
     private final ObjectMapper mapper;
     private final Duration requestTimeout;
@@ -51,7 +58,10 @@ public final class Legichain {
             throw new IllegalArgumentException("legichain: apiKey is required");
         }
         this.authHeader     = "Bearer " + b.apiKey;
-        this.baseUri        = URI.create(stripTrailingSlash(b.baseUrl));
+        this.baseUri        = URI.create(stripTrailingSlash(
+                b.region != null && b.baseUrlExplicit == false
+                        ? regionHost(b.region) : b.baseUrl));
+        this.region         = b.region;
         this.http           = b.httpClient != null
                               ? b.httpClient
                               : HttpClient.newBuilder()
@@ -67,6 +77,43 @@ public final class Legichain {
     }
 
     public static Builder builder() { return new Builder(); }
+
+    private OperationAccepted enqueueOperation(String path,Object body,String key,String clientToken) {
+        if (key==null || key.getBytes(java.nio.charset.StandardCharsets.UTF_8).length<1 || key.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>256)
+            throw new IllegalArgumentException("An explicit 1–256 byte idempotency key is required");
+        return post(path,body,key,clientToken,OperationAccepted.class);
+    }
+    private static String operationKind(String value,String... allowed) {
+        if (!java.util.Arrays.asList(allowed).contains(value)) throw new IllegalArgumentException("Unsupported operation kind");
+        return value;
+    }
+    public OperationAccepted enqueueScreen(String kind,Object body,String key) {
+        return enqueueOperation("/v2/screen/"+operationKind(kind,"person","company","crypto","batch"),body,key,null);
+    }
+    public OperationAccepted enqueueReport(String kind,Object body,String key) {
+        return enqueueOperation("/v2/reports/"+operationKind(kind,"person","company","wallet"),body,key,null);
+    }
+    public OperationAccepted enqueueKycReport(String applicationId,Object body,String key) {
+        return enqueueOperation("/v2/reports/kyc/"+enc(applicationId),body,key,null);
+    }
+    public OperationAccepted enqueueKycEvidence(String applicationId,String step,Object body,String key,String clientToken) {
+        return enqueueOperation("/v2/kyc/applications/"+enc(applicationId)+"/"+operationKind(step,"documents","selfie","liveness","nfc"),body,key,clientToken);
+    }
+    public OperationAccepted enqueueAddressSubmit(String verificationId,Object body,String key) {
+        return enqueueOperation("/v2/address-verifications/"+enc(verificationId)+"/submit",body,key,null);
+    }
+    public com.fasterxml.jackson.databind.JsonNode operation(String id) {
+        return get("/v2/operations/"+enc(id),com.fasterxml.jackson.databind.JsonNode.class);
+    }
+    public com.fasterxml.jackson.databind.JsonNode operationTask(String id,String taskId) {
+        return get("/v2/operations/"+enc(id)+"/tasks/"+enc(taskId),com.fasterxml.jackson.databind.JsonNode.class);
+    }
+    public com.fasterxml.jackson.databind.JsonNode operations(String cursor,String state,int limit) {
+        return get("/v2/operations?limit="+limit+(cursor==null?"":"&cursor="+enc(cursor))+(state==null?"":"&state="+enc(state)),com.fasterxml.jackson.databind.JsonNode.class);
+    }
+    public com.fasterxml.jackson.databind.JsonNode cancelOperation(String id) {
+        return post("/v2/operations/"+enc(id)+"/cancel",Map.of(),null,com.fasterxml.jackson.databind.JsonNode.class);
+    }
 
     // ── screening ──────────────────────────────────────────────────────
 
@@ -385,7 +432,44 @@ public final class Legichain {
     }
 
     @SuppressWarnings("unchecked")
+    /** The host this client is currently talking to. Moves by itself the
+     *  first time the API says the account lives somewhere else. */
+    public String baseUrl() { return baseUri.toString(); }
+
+    /** The region serving this account, or null until it is known. */
+    public String region() { return region; }
+
+    /** Where a region answers when all we have is its code. The API
+     *  publishes the real host in its 421 and that is preferred; this
+     *  covers a reply naming a region and nothing else. */
+    private static String regionHost(String code) {
+        return "https://" + code + "-api.legichain.com";
+    }
+
+    /** Move to the host that owns this account, reporting whether the
+     *  caller should repeat the request. Both 421s the API can send are
+     *  produced before the request reaches a handler, so nothing was
+     *  written and repeating it is not a duplicate. */
+    private boolean repin(int sc, ProblemDetails pd) {
+        if (sc != 421 || pd == null || !WRONG_REGION.equals(pd.code())) return false;
+        String target = pd.apiBaseUrl();
+        if ((target == null || target.isEmpty()) && pd.region() != null)
+            target = regionHost(pd.region());
+        if (target == null || target.isEmpty()) return false;
+        target = stripTrailingSlash(target);
+        if (target.equals(baseUri.toString())) return false;
+        this.baseUri = URI.create(target);
+        if (pd.region() != null) this.region = pd.region();
+        return true;
+    }
+
     private <T> T send(HttpRequest req, Class<T> type, boolean binary) {
+        return send(req, type, binary, false);
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> T send(HttpRequest req, Class<T> type, boolean binary,
+                       boolean retried) {
         HttpResponse<byte[]> res;
         try {
             res = http.send(req, HttpResponse.BodyHandlers.ofByteArray());
@@ -405,7 +489,17 @@ public final class Legichain {
                 pd = new ProblemDetails(
                         "https://legichain.com/errors/UNKNOWN",
                         "Error", sc, new String(body),
-                        "HTTP_" + sc, null, null);
+                        "HTTP_" + sc, null, null, null, null);
+            }
+            if (!retried && repin(sc, pd)) {
+                String pathAndQuery = req.uri().getRawPath()
+                        + (req.uri().getRawQuery() == null
+                                ? "" : "?" + req.uri().getRawQuery());
+                HttpRequest moved = HttpRequest
+                        .newBuilder(req, (n, v) -> true)
+                        .uri(baseUri.resolve(pathAndQuery))
+                        .build();
+                return send(moved, type, binary, true);
             }
             throw new LegichainException(pd);
         }
@@ -435,13 +529,28 @@ public final class Legichain {
     public static final class Builder {
         private String apiKey;
         private String baseUrl = "https://api.legichain.com";
+        private boolean baseUrlExplicit = false;
+        private String region;
         private HttpClient httpClient;
         private ObjectMapper objectMapper;
         private Duration requestTimeout;
         private final Map<String, String> defaultHeaders = new HashMap<>();
 
         public Builder apiKey(String key) { this.apiKey = key; return this; }
-        public Builder baseUrl(String url) { this.baseUrl = url; return this; }
+        public Builder baseUrl(String url) {
+            this.baseUrl = url;
+            this.baseUrlExplicit = true;
+            return this;
+        }
+
+        /**
+         * Start at a named region's host — {@code "eu"}, {@code "tr"} — which
+         * saves one redirect on the first call. Optional: an account's region
+         * is learned from the first call that needs it, and {@link
+         * Legichain#region()} reports it once known. An explicit {@link
+         * #baseUrl(String)} always wins.
+         */
+        public Builder region(String code) { this.region = code; return this; }
         public Builder httpClient(HttpClient c) { this.httpClient = c; return this; }
         public Builder objectMapper(ObjectMapper m) { this.objectMapper = m; return this; }
         public Builder requestTimeout(Duration d) { this.requestTimeout = d; return this; }

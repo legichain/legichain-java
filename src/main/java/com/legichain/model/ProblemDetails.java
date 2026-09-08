@@ -15,5 +15,11 @@ public record ProblemDetails(
         @JsonProperty("detail")   String detail,
         @JsonProperty("code")     String code,
         @JsonProperty("instance") String instance,
-        @JsonProperty("errors")   List<Map<String, Object>> errors
+        @JsonProperty("errors")   List<Map<String, Object>> errors,
+        /** Set on a 421 (REG_001_WRONG_REGION): the region that owns
+         *  this account. The client re-pins to its host and retries,
+         *  so callers rarely see this error at all. */
+        @JsonProperty("region")       String region,
+        /** The host that serves {@code region}. */
+        @JsonProperty("api_base_url") String apiBaseUrl
 ) {}
