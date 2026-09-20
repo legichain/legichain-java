@@ -26,13 +26,13 @@ and Travel Rule API.
 <dependency>
   <groupId>com.legichain</groupId>
   <artifactId>legichain</artifactId>
-  <version>0.1.0</version>
+  <version>2.0.0</version>
 </dependency>
 ```
 
 ```kotlin
 // Gradle (Kotlin DSL)
-implementation("com.legichain:legichain:0.1.0")
+implementation("com.legichain:legichain:2.0.0")
 ```
 
 [![GitHub release](https://img.shields.io/github/v/tag/legichain/legichain-java.svg)](https://github.com/legichain/legichain-java/releases)
