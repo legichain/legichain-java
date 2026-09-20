@@ -1,3 +1,21 @@
+# Legichain java SDK v2
+
+Official SDK for the existing Legichain API. [KYC v2 integration and migration](https://github.com/legichain/legichain-java/blob/main/KYC-V2.md)
+contains the current wire contract, check flags, asynchronous evidence and
+submission behavior. Version: **2.0.0**; publication status is tracked separately.
+
+```java
+var client = Legichain.builder().apiKey(apiToken).build();
+var flow = client.startKyc(Map.of("subject_external_id", "customer-42"), "customer-42-application");
+var receipt = flow.evidence("documents", body, "customer-42-front-capture-1");
+flow.awaitEvidence(receipt.operationId(), Duration.ofMinutes(2));
+// Upload all remaining configured evidence, then:
+var submission = flow.submit();
+```
+Bodies accept maps/POJOs and preserve current API fields; see the JSON schema.
+
+---
+
 # Legichain Java SDK
 
 Official Java client for the **[Legichain](https://legichain.com)** AML, KYC

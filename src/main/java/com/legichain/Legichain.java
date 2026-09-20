@@ -166,6 +166,18 @@ public final class Legichain {
     }
 
     @SuppressWarnings("unchecked")
+    public Map<String, Object> kycCreateApplication(Map<String, Object> body, String idempotencyKey) {
+        if (idempotencyKey == null || idempotencyKey.isEmpty() || idempotencyKey.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 256)
+            throw new IllegalArgumentException("An explicit 1–256 byte idempotency key is required");
+        return (Map<String, Object>) post("/v1/kyc/applications", body, idempotencyKey, Map.class);
+    }
+
+    public KycSession startKyc(Map<String, Object> body, String idempotencyKey) {
+        var created = kycCreateApplication(body, idempotencyKey);
+        return new KycSession(this, (String) created.get("application_id"), (String) created.get("client_token"));
+    }
+
+    @SuppressWarnings("unchecked")
     public Map<String, Object> kycStatus(String applicationId) {
         return kycStatus(applicationId, false);
     }
@@ -411,7 +423,7 @@ public final class Legichain {
                 .timeout(requestTimeout)
                 .header("Authorization", authHeader)
                 .header("Accept", accept)
-                .header("User-Agent", "legichain-java/0.1.0");
+                .header("User-Agent", "legichain-java/2.0.0");
         defaultHeaders.forEach(b::header);
         if (idem != null && !idem.isEmpty()) b.header("Idempotency-Key", idem);
         if (clientToken != null && !clientToken.isEmpty())
